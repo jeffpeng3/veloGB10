@@ -2537,14 +2537,17 @@ fn cli_opts_bridge(args: &[String]) {
             // [kv-cache], so these values are refused there rather than silently serving bf16.
             // q4x = the WP25 kvnll probe's deliberately broken positive control (never served:
             // exl3_serve refuses it)
-            "f32" | "f16" | "fp8" | "q8" | "q4x" => {
-                if !parse_arg(args, "--model-dir").map_or(false, gb10_inference::exl3_serve::is_exl3_pack) {
+            "f32" | "f16" | "fp8" | "q8" | "q4x" | "q4k" => {
+                // --probe-exl3-kvq measures the formats with no model at all, so it takes them
+                // without an EXL3 --model-dir (this bridge used to exit before the probe ran).
+                let kvq_probe = args.iter().any(|a| a == "--probe-exl3-kvq");
+                if !kvq_probe && !parse_arg(args, "--model-dir").map_or(false, gb10_inference::exl3_serve::is_exl3_pack) {
                     eprintln!("--kv-cache {v} is an EXL3-pack format (needs an EXL3 --model-dir); NVFP4 formats are bf16|q4|tq|tq3|k8v4|k8v8");
                     std::process::exit(1);
                 }
                 opts::set(opt!("kv-cache"), v);
             }
-            other => { eprintln!("--kv-cache must be bf16|q4|tq|tq3|k8v4|k8v8 (NVFP4) or f32|f16|fp8|q8 (EXL3) (got '{other}')"); std::process::exit(1); }
+            other => { eprintln!("--kv-cache must be bf16|q4|tq|tq3|k8v4|k8v8 (NVFP4) or f32|f16|fp8|q8|q4k (EXL3) (got '{other}')"); std::process::exit(1); }
         }
     }
     // MTP: the bench-path [tp-mtp] / [tp-mtp-depth] internals from the server CLI (`--mtp=on|off`, `--mtp-depth`).
