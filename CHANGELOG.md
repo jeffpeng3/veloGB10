@@ -1,3 +1,53 @@
+## Unreleased — q4k: a KVarN-style 4-bit KV cache on the EXL3 path
+
+`--kv-cache q4k` stores both K and V at 4 bits on the q8 H32 basis: one f16 scale
+per 32-dim group and 4-bit codes two dims per byte. A row is 144 B at hd=256
+instead of q8's 272, so one cache holds 1.89x the tokens.
+
+Measured on a Flash-Next 3.05 pack (8 windows x 2,048 tokens, three texts, vs q8):
+
+| text | q8 | q4k | delta |
+|---|---|---|---|
+| code | 3.9768 | 3.9792 | +0.06% |
+| prose | 6.8758 | 6.8727 | -0.05% |
+| json | 1.4098 | 1.4098 | 0.00% |
+
+At 262K on this box the trunk cache drops from 13.69 GB to 7.25 GB per four lanes
+(1.89x), which moves the lane count from 5 to 8 (3.76 GB/lane). The probe's
+synthetic-row SNR is 22.98 dB (q8 47.07, the 4-bit q4x control 22.93).
+
+What changed:
+
+- `KV_Q4K = 5`; `kv_fmt_from_opts`/`name`/`rowbytes` learn q4k; the option bridge,
+  both server parse sites, the perplexity tool and the lane-fit estimate (0.5625
+  B/elem) accept it.
+- `xq_kv_rowb`/`put`/`ld`/`ld8` handle the packed row; `--probe-exl3-kvq
+  --kv-cache q4k` matches the host reference bit for bit.
+- `flash256` stages q4k through its own case, so prefill keeps the fast path.
+- `dense-v3` handles q4k: `xq_dv3_stage_v` takes the row's scale offset and a new
+  `xq_dv3_ldv_q4k` unpacks the staged nibbles, so decode and verify run the same
+  kernels as q8. `--exl3-dense-xcheck=1` reports 0 mismatching halves on lone
+  verifies and decode steps; PPL is identical with dense-v3 on and off.
+- The head-grouped/union QSA gathers, the pq8 raw-byte gather and the W4S draft
+  attention still stage q8 rows and stay off for q4k. QSA uses
+  `xq_attn_sel_splitk4`; the W4S accumulate twin keeps the v3 kernel.
+- Lane packing works on q4k. `--probe-exl3-pack2` / `--probe-exl3-packstate` pass
+  on q8 and q4k.
+- Throughput (8K context, prefix cache off, 128 output tokens, 1/2/4 streams):
+  q8 66.0 / 88.3 / 92.3 tok/s, q4k 63.7 / 84.7 / 92.9. The 4-stream ceiling is
+  weight-bandwidth bound and format-independent.
+
+Known limitation (kept deliberately): `xq_attn_decode_group` assumes one KV slot
+for the whole group. A packed verify spans two slots, so it must run dense-v3
+(the default); `--lane-pack on` combined with `--exl3-dense-v3=0` would read and
+write the second lane's K/V in the first lane's slot. q8 has the same latent bug;
+it is masked because q8's packed verify also runs dense-v3. Documented in
+`docs/KVARN_Q4K_PLAN.md` and to be raised upstream.
+
+Not shipped: a 2-bit V. It measured +0.23% (json) to +2.99% (prose) perplexity,
+above the 0.5% bar, and scale calibration did not recover it; the 4-bit V is the
+quality-safe point (PLAN docs/KVARN_Q4K_PLAN.md).
+
 ## v0.7.8 — fix: `top_k` client compatibility (PR #29 by @andersc) + the NVFP4 sampler cap made explicit
 
 Fixes the client-compatibility blocker reported in [#29](https://github.com/sf-stav/veloGB10/pull/29):
